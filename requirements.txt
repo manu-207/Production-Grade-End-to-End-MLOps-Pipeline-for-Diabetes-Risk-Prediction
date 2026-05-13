@@ -9,3 +9,5 @@ pytest
 prometheus-flask-exporter   
 prometheus-client  
 evidently
+apache-airflow==2.9.0
+python-dotenv
