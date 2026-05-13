@@ -1,0 +1,170 @@
+name: MLOps CI Pipeline with my latest project
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+jobs:
+
+  # ─────────────────────────────────────────────────────────────
+  # JOB 1 — Run pytest
+  # ─────────────────────────────────────────────────────────────
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest flask pandas
+
+      - name: Run tests
+        run: pytest tests/ -v
+        env:
+          MLFLOW_TRACKING_URI: "file:///tmp/mlruns"
+
+  # ─────────────────────────────────────────────────────────────
+  # JOB 2 — Train → Monitor → Build Docker → Deploy to ECS
+  # ─────────────────────────────────────────────────────────────
+  train-evaluate:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    env:
+      MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+      MLFLOW_EXPERIMENT_NAME: manu7-mlops
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ap-south-1
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest flask pandas
+
+      # ── FIX: create reports/ dir so DVC doesn't fail on pull ─────────────
+      - name: Create reports directory
+        run: mkdir -p reports
+
+      - name: Pull data from DVC
+        run: dvc pull
+
+      # dvc repro runs: preprocess → train → evaluate → monitor
+      - name: Run DVC Pipeline
+        run: dvc repro
+
+      # ── Upload Evidently HTML report as CI artifact ───────────────────────
+      - name: Upload Evidently Drift Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidently-drift-report-${{ github.sha }}
+          path: |
+            reports/data_drift_report.html
+            reports/evidently_summary.json
+          retention-days: 30
+
+      # ── Fail CI if drift_share > 0.5 (50% of columns drifted) ────────────
+      - name: Check drift threshold
+        run: |
+          python3 - <<'PYEOF'
+          import json, sys
+          with open("reports/evidently_summary.json") as f:
+              summary = json.load(f)
+          drift = summary.get("drift_share", 0)
+          print(f"Drift share: {drift:.2%}")
+          if drift > 0.5:
+              print("DRIFT TOO HIGH — blocking deployment!")
+              sys.exit(1)
+          print("Drift within acceptable range — proceeding.")
+          PYEOF
+
+      - name: Push DVC outputs to S3
+        run: dvc push
+
+      - name: Commit DVC changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add dvc.lock || true
+          git diff --quiet && git diff --staged --quiet || \
+            git commit -m "Update DVC pipeline results [skip ci]"
+
+      - name: Push changes to repository
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.ref }}
+
+      # ── Docker: Build & Push to ECR ──────────────────────────────────────
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, Tag and Push Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: manu7-mlops-api
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker tag  $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+                      $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+      # ── ECS: Deploy ───────────────────────────────────────────────────────
+      - name: Deploy to ECS Fargate
+        run: |
+          aws ecs update-service \
+            --cluster manu7-mlops-cluster \
+            --service manu7-mlops-task-service2 \
+            --force-new-deployment \
+            --region ap-south-1
+
+      - name: Verify Prometheus scrape target
+        run: |
+          sleep 30
+          STATUS=$(curl -s "http://${{ secrets.EC2_PUBLIC_IP }}:9090/api/v1/targets" \
+            | python3 -c "import sys,json; t=json.load(sys.stdin)['data']['activeTargets'][0]; print(t['health'])")
+          echo "Prometheus target health: $STATUS"
+          [ "$STATUS" = "up" ] || exit 1

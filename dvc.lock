@@ -1,0 +1,84 @@
+schema: '2.0'
+stages:
+  preprocess:
+    cmd: python src/preprocess.py
+    deps:
+    - path: data/raw/data.csv
+      hash: md5
+      md5: d2e5ae01d94e8e633f00aec89e46301d
+      size: 23841
+    - path: src/preprocess.py
+      hash: md5
+      md5: 64bb98d62fa505677de7f040d664822d
+      size: 469
+    params:
+      params.yaml:
+        preprocess.input: data/raw/data.csv
+        preprocess.output: data/processed/data.csv
+    outs:
+    - path: data/processed/data.csv
+      hash: md5
+      md5: d4aa97f19d57a39a23ce6f46eeb2b3a3
+      size: 23162
+  train:
+    cmd: python src/train.py
+    deps:
+    - path: data/raw/data.csv
+      hash: md5
+      md5: d2e5ae01d94e8e633f00aec89e46301d
+      size: 23841
+    - path: src/train.py
+      hash: md5
+      md5: a376d05a8c572fb5d0bbf9be1d385148
+      size: 3395
+    params:
+      params.yaml:
+        train.data: data/raw/data.csv
+        train.max_depth: 5
+        train.model: models/model.pkl
+        train.n_estimators: 100
+        train.random_state: 42
+    outs:
+    - path: models/model.pkl
+      hash: md5
+      md5: 9746ad2f86f2c152d3227439d0de2f6e
+      size: 399121
+  evaluate:
+    cmd: python src/evaluate.py
+    deps:
+    - path: data/raw/data.csv
+      hash: md5
+      md5: d2e5ae01d94e8e633f00aec89e46301d
+      size: 23841
+    - path: models/model.pkl
+      hash: md5
+      md5: 9746ad2f86f2c152d3227439d0de2f6e
+      size: 399121
+    - path: src/evaluate.py
+      hash: md5
+      md5: 9bcc8b7c192ab5c6674bf16a21d62cc7
+      size: 955
+  monitor:
+    cmd: python src/monitor.py
+    deps:
+    - path: data/raw/data.csv
+      hash: md5
+      md5: d2e5ae01d94e8e633f00aec89e46301d
+      size: 23841
+    - path: models/model.pkl
+      hash: md5
+      md5: 9746ad2f86f2c152d3227439d0de2f6e
+      size: 399121
+    - path: src/monitor.py
+      hash: md5
+      md5: 2bfead2f6f7e31263501dafe132f51af
+      size: 6004
+    outs:
+    - path: reports/data_drift_report.html
+      hash: md5
+      md5: 7a40f3bb23e14c6c303d1c1235983082
+      size: 4331137
+    - path: reports/evidently_summary.json
+      hash: md5
+      md5: 9b5b07230d59d8a31d006229a2af8a25
+      size: 107
