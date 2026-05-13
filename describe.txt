@@ -1,0 +1,1 @@
+This is a production-grade MLOps pipeline that predicts diabetes risk using the Pima Indians dataset. It covers the complete ML lifecycle end-to-end — from raw data to a live, monitored API deployed on AWS.
