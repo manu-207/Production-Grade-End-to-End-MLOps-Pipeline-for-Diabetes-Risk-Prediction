@@ -16,8 +16,8 @@ default_args = {
 with DAG(
     dag_id="mlops_diabetes_retraining",
     description="Weekly retraining pipeline for diabetes model",
-    schedule_interval="@weekly",          # every Monday at midnight
-    start_date=datetime(2025, 1, 1),
+    schedule_interval="*/10 * * * *",    # ← every 10 minutes
+    start_date=datetime(2026, 5, 13),    # ← today's date
     catchup=False,
     default_args=default_args,
     tags=["mlops", "diabetes"],
