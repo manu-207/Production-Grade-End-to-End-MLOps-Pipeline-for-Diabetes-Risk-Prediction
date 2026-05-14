@@ -1,0 +1,23 @@
+# ── Python packages installed into the custom Airflow image ───────────────────
+# These are needed so DAG tasks can run src/train.py, dvc pull, etc.
+
+# ML pipeline dependencies
+scikit-learn==1.4.2
+pandas==2.2.2
+numpy==1.26.4
+
+# MLflow experiment tracking
+mlflow==2.13.0
+
+# DVC data versioning + S3 remote
+dvc==3.50.1
+dvc-s3==3.2.0
+
+# Evidently data drift monitoring
+evidently==0.4.33
+
+# Environment variable loading
+python-dotenv==1.0.1
+
+# YAML parsing (already in base but pinned for consistency)
+PyYAML==6.0.1
