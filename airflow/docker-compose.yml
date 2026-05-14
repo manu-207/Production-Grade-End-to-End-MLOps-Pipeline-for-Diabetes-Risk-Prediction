@@ -1,0 +1,94 @@
+version: "3.8"
+
+# ── Shared config for all Airflow services ────────────────────────────────────
+x-airflow-common: &airflow-common
+  build:
+    context: .                        # airflow/ folder
+    dockerfile: Dockerfile.airflow    # our custom image with ML packages
+  env_file:
+    - .env                            # load airflow/.env (copy from .env.example)
+  environment:
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__FERNET_KEY: ""
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: "30"
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+    # Pass secrets from .env into every container
+    AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+    AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+    AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
+    MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI}
+    MLFLOW_EXPERIMENT_NAME: ${MLFLOW_EXPERIMENT_NAME}
+    ECS_CLUSTER: ${ECS_CLUSTER}
+    ECS_SERVICE: ${ECS_SERVICE}
+    ECS_REGION: ${ECS_REGION}
+  volumes:
+    # DAG files — Airflow scheduler reads from here
+    - ./dags:/opt/airflow/dags
+    # Task logs
+    - ./logs:/opt/airflow/logs
+    # Plugins (empty but required)
+    - ./plugins:/opt/airflow/plugins
+    # ── Mount the entire ML project so tasks can run src/train.py etc. ───────
+    # ".." goes up one level from airflow/ to the project root
+    - ..:/opt/airflow/project
+    # AWS credentials read-only (fallback if env vars not enough for dvc-s3)
+    - ~/.aws:/home/airflow/.aws:ro
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+
+  # ── Postgres: Airflow internal metadata database ──────────────────────────
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  # ── Airflow Web UI ─────────────────────────────────────────────────────────
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  # ── Airflow Scheduler — runs tasks on schedule ────────────────────────────
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    restart: unless-stopped
+
+  # ── One-time DB init + admin user creation ────────────────────────────────
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate &&
+        airflow users create \
+          --username ${AIRFLOW_ADMIN_USER:-admin} \
+          --password ${AIRFLOW_ADMIN_PASSWORD:-admin} \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@example.com
+    restart: "no"
+
+volumes:
+  postgres_data:
