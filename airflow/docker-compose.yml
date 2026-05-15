@@ -3,10 +3,10 @@ version: "3.8"
 # ── Shared config for all Airflow services ────────────────────────────────────
 x-airflow-common: &airflow-common
   build:
-    context: .                        # airflow/ folder
-    dockerfile: Dockerfile.airflow    # our custom image with ML packages
+    context: .
+    dockerfile: Dockerfile.airflow
   env_file:
-    - .env                            # load airflow/.env (copy from .env.example)
+    - .env
   environment:
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
@@ -25,16 +25,10 @@ x-airflow-common: &airflow-common
     ECS_SERVICE: ${ECS_SERVICE}
     ECS_REGION: ${ECS_REGION}
   volumes:
-    # DAG files — Airflow scheduler reads from here
     - ./dags:/opt/airflow/dags
-    # Task logs
     - ./logs:/opt/airflow/logs
-    # Plugins (empty but required)
     - ./plugins:/opt/airflow/plugins
-    # ── Mount the entire ML project so tasks can run src/train.py etc. ───────
-    # ".." goes up one level from airflow/ to the project root
     - ..:/opt/airflow/project
-    # AWS credentials read-only (fallback if env vars not enough for dvc-s3)
     - ~/.aws:/home/airflow/.aws:ro
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
@@ -43,7 +37,7 @@ x-airflow-common: &airflow-common
 
 services:
 
-  # ── Postgres: Airflow internal metadata database ──────────────────────────
+  # ── Postgres ──────────────────────────────────────────────────────────────
   postgres:
     image: postgres:15
     environment:
@@ -59,6 +53,25 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  # ── Fix permissions before anything else starts ───────────────────────────
+  # Runs as root, chowns the mounted project to airflow uid 50000, then exits.
+  # Every other service depends on this completing first.
+  airflow-fix-perms:
+    image: alpine:3.19
+    user: "0:0"
+    volumes:
+      - ..:/opt/airflow/project
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+    command: >
+      sh -c "
+        chown -R 50000:0 /opt/airflow/project &&
+        chown -R 50000:0 /opt/airflow/logs &&
+        chown -R 50000:0 /opt/airflow/plugins &&
+        echo 'Permissions fixed.'
+      "
+    restart: "no"
+
   # ── Airflow Web UI ─────────────────────────────────────────────────────────
   airflow-webserver:
     <<: *airflow-common
@@ -66,12 +79,22 @@ services:
     ports:
       - "8080:8080"
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-fix-perms:
+        condition: service_completed_successfully
 
-  # ── Airflow Scheduler — runs tasks on schedule ────────────────────────────
+  # ── Airflow Scheduler ─────────────────────────────────────────────────────
   airflow-scheduler:
     <<: *airflow-common
     command: scheduler
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-fix-perms:
+        condition: service_completed_successfully
 
   # ── One-time DB init + admin user creation ────────────────────────────────
   airflow-init:
@@ -89,6 +112,11 @@ services:
           --role Admin \
           --email admin@example.com
     restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-fix-perms:
+        condition: service_completed_successfully
 
 volumes:
   postgres_data:
