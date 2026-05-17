@@ -76,7 +76,7 @@ stages:
     outs:
     - path: reports/data_drift_report.html
       hash: md5
-      md5: 0219155fed4f504849b35d1dd448ceb3
+      md5: 805cb01bae15b7031ff64254f40bf584
       size: 4331137
     - path: reports/evidently_summary.json
       hash: md5
