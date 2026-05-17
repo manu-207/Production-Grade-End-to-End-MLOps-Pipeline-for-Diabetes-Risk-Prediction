@@ -71,12 +71,12 @@ stages:
       size: 399121
     - path: src/monitor.py
       hash: md5
-      md5: 2bfead2f6f7e31263501dafe132f51af
-      size: 6004
+      md5: ab25741034d86f6e8538482debe9fd4f
+      size: 6317
     outs:
     - path: reports/data_drift_report.html
       hash: md5
-      md5: 85a71f80058184590acd41d1d69fb6e3
+      md5: c394f14a7c1a509ceb8b5ac40ed944fb
       size: 4331137
     - path: reports/evidently_summary.json
       hash: md5
