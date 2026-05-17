@@ -1,4 +1,4 @@
-name: MLOps CI Pipeline with my latest project production pipeline 
+name: MLOps CI Pipeline with my latest project
 
 on:
   push:
@@ -125,7 +125,7 @@ jobs:
       - name: Push changes to repository
         uses: ad-m/github-push-action@master
         with:
-          github_token: ${{ secrets.TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           branch: ${{ github.ref }}
 
       # ── Docker: Build & Push to ECR ──────────────────────────────────────
@@ -168,3 +168,25 @@ jobs:
             | python3 -c "import sys,json; t=json.load(sys.stdin)['data']['activeTargets'][0]; print(t['health'])")
           echo "Prometheus target health: $STATUS"
           [ "$STATUS" = "up" ] || exit 1
+
+      # ── NEW: Notify Airflow that a fresh image is now live on ECS ─────────
+      # Airflow's weekly DAG does data-driven retraining on a schedule.
+      # This step also lets you kick off a DAG run immediately whenever
+      # a code change lands on main (e.g. a new feature in src/train.py).
+      # If Airflow is unreachable the step is skipped — CI still passes.
+      - name: Trigger Airflow retraining DAG
+        continue-on-error: true          # don't fail CI if Airflow is down
+        run: |
+          curl -f -X POST \
+            "http://${{ secrets.AIRFLOW_HOST }}:8080/api/v1/dags/mlops_diabetes_retraining/dagRuns" \
+            -H "Content-Type: application/json" \
+            -u "admin:${{ secrets.AIRFLOW_PASSWORD }}" \
+            -d '{
+                  "conf": {
+                    "triggered_by":  "github_actions",
+                    "git_sha":       "${{ github.sha }}",
+                    "git_actor":     "${{ github.actor }}",
+                    "pipeline_run":  "code-change-retrain"
+                  }
+                }'
+          echo "Airflow DAG triggered successfully."
