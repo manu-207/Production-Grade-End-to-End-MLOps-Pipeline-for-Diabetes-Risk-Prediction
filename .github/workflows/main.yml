@@ -1,4 +1,4 @@
-name: MLOps CI Pipeline with my latest project production grade
+name: MLOps CI Pipeline with my latest project production grade manu7 project
 
 on:
   push:
