@@ -24,6 +24,8 @@ x-airflow-common: &airflow-common
     ECS_CLUSTER: ${ECS_CLUSTER}
     ECS_SERVICE: ${ECS_SERVICE}
     ECS_REGION: ${ECS_REGION}
+    AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session"
+    AIRFLOW__WEBSERVER__SECRET_KEY: "mysecretkey123"
   volumes:
     - ./dags:/opt/airflow/dags
     - ./logs:/opt/airflow/logs
