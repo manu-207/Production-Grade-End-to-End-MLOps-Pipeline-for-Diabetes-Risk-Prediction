@@ -13,7 +13,7 @@ from evidently import Report
 from evidently.metrics import DriftedColumnsCount, ValueDrift
 from evidently.presets import DataDriftPreset, DataSummaryPreset
 
-# ── MLflow setup (same pattern as train.py) ───────────────────────────────────
+# ── MLflow setup ──────────────────────────────────────────────────────────────
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI")
 if not MLFLOW_TRACKING_URI:
     raise EnvironmentError("MLFLOW_TRACKING_URI env var is not set")
@@ -52,15 +52,14 @@ def run_monitoring(data_path: str, model_path: str, report_dir: str = "reports")
     X_cur["prediction"] = model.predict(X_cur)
 
     # ── Build Evidently Report (0.7.x API) ────────────────────────────────────
-    # NOTE: report.run() returns a Snapshot object in evidently >= 0.6
     report = Report(metrics=[
-        DriftedColumnsCount(),          # overall drift share across all columns
-        ValueDrift(column="Glucose"),   # KS p-value for Glucose
+        DriftedColumnsCount(),
+        ValueDrift(column="Glucose"),
         ValueDrift(column="BMI"),
         ValueDrift(column="Age"),
         ValueDrift(column="prediction"),
-        DataDriftPreset(),              # per-column drift table
-        DataSummaryPreset(),            # data quality summary
+        DataDriftPreset(),
+        DataSummaryPreset(),
     ])
     snapshot = report.run(reference_data=X_ref, current_data=X_cur)
 
@@ -70,28 +69,40 @@ def run_monitoring(data_path: str, model_path: str, report_dir: str = "reports")
     snapshot.save_html(html_path)
     print(f"[Evidently] HTML report saved -> {html_path}")
 
-    # ── Extract metrics from Snapshot.metric_results ──────────────────────────
-    # DriftedColumnsCount: result.share.value = fraction of drifted columns
-    # ValueDrift:          result.value = KS p-value; drift if p < 0.05
+    # ── Extract metrics from Snapshot using .as_dict() ───────────────────────
+    # evidently 0.7.x: snapshot.as_dict() returns the full results as a dict
     drift_share      = 0.0
     glucose_drift    = 0
     bmi_drift        = 0
     age_drift        = 0
     prediction_drift = 0
 
-    for _, result in snapshot.metric_results.items():
-        name = result.display_name
+    try:
+        result_dict = snapshot.as_dict()
+        metrics_list = result_dict.get("metrics", [])
 
-        if hasattr(result, "share") and "Count of Drifted" in name:
-            drift_share = float(result.share.value)
+        for metric in metrics_list:
+            metric_id = str(metric.get("metric", ""))
+            result    = metric.get("result", {})
 
-        elif hasattr(result, "value") and "Value drift for" in name:
-            p_value  = float(result.value)
-            detected = int(p_value < 0.05)
-            if "Glucose"     in name: glucose_drift    = detected
-            elif "BMI"       in name: bmi_drift        = detected
-            elif "Age"       in name: age_drift        = detected
-            elif "prediction" in name: prediction_drift = detected
+            # DriftedColumnsCount → share_drifted_features
+            if "DriftedColumnsCount" in metric_id:
+                share = result.get("share_drifted_features", None)
+                if share is not None:
+                    drift_share = float(share)
+
+            # ValueDrift per column → drift_detected (bool)
+            elif "ValueDrift" in metric_id:
+                col      = result.get("column_name", "")
+                detected = int(result.get("drift_detected", False))
+                if col == "Glucose":    glucose_drift    = detected
+                elif col == "BMI":      bmi_drift        = detected
+                elif col == "Age":      age_drift        = detected
+                elif col == "prediction": prediction_drift = detected
+
+    except Exception as e:
+        print(f"[Evidently] WARNING: Could not extract detailed metrics: {e}")
+        print("[Evidently] Using default values (drift_share=0)")
 
     summary = {
         "drift_share":      round(drift_share, 4),
